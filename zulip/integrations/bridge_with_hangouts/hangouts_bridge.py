@@ -37,12 +37,15 @@ HangoutsCallbackType = Callable[[hangups.ConversationList, hangups.ConversationE
 class Bridge:
     "Zulip/Hangouts bridge"""
 
-    def __init__(self, hangouts_client, zulip_client, streams, event_loop):
-        # type: (Any, hangups.Client, zulip.Client, Dict[str, str], asyncio.AbstractEventLoop) -> None
+    def __init__(self, hangouts_client: hangups.Client,
+                 zulip_client: zulip.Client, zulip_config: Dict[str, str],
+                 streams: Dict[str, str], event_loop: asyncio.AbstractEventLoop) -> None:
         self._hangouts_client = hangouts_client
         self._hangouts_conv_list = None
         self._zulip_client = zulip_client
         self._streams = streams
+        self._default_stream = zulip_config.get('default_stream')
+        self._default_topic = zulip_config.get('default_topic', '(no topic)')
         self._event_loop = event_loop
 
     def send_hangout(self, conv_id, body):
@@ -72,14 +75,25 @@ class Bridge:
             if not hangout:
                 logger.warning("Message received on unknown stream %s from %s", stream, sender)
                 return
-            subject = "[%s] " % (msg['subject'],) if msg['subject'] != 'hangouts' else ""
+            if msg['subject'] == self._default_topic:
+                subject = ""
+            else:
+                subject = "[%s] " % (msg['subject'],)
             body = "%s: %s%s" % (sender, subject, msg['content'])
             self.send_hangout(hangout, body)
         return zulip_to_hangouts
 
     def get_stream_from_hangouts_event(self, conv_event):
-        # type: (Any, str) -> str
-        return 'adehnert-test'
+        # type: (Any, hangups.ConversationEvent) -> str
+        for stream, hangout in self._streams.items():
+            if conv_event.conversation_id == hangout:
+                return stream
+
+        # Finished loop, so we don't know this hangout
+        conversation = self._hangouts_conv_list.get(conv_event.conversation_id)
+        conv_name = conversation.name
+        logger.warning("unknown hangout: %s %s", conv_event.conversation_id, conv_name)
+        return self._default_stream
 
     def build_hangouts_processor(self):
         # type: (Any) -> HangoutsCallbackType
@@ -97,12 +111,15 @@ class Bridge:
                 stream = self.get_stream_from_hangouts_event(conv_event)
                 content = "*%s*: %s" % (sender_user.full_name, conv_event.text)
 
-                result = self._zulip_client.send_message({
+                reply_data = {
                     "type": "stream",
                     "to": stream,
-                    "subject": "hangouts",
+                    "subject": self._default_topic,
                     "content": content,
-                })
+                }
+                result = self._zulip_client.send_message(reply_data)
+                if result['result'] != 'success':
+                    logger.warning("tried to send zulip %s, got result %s", reply_data, result)
         return hangouts_to_zulip
 
     def run_hangouts(self):
@@ -285,7 +302,7 @@ def main():
                                         site=zulip_config["site"])
 
             loop = asyncio.get_event_loop()
-            bridge = Bridge(hangouts_client, zulip_client, stream_config, loop)
+            bridge = Bridge(hangouts_client, zulip_client, zulip_config, stream_config, loop)
 
             print("Starting message handler on Zulip client")
             zulip_func = lambda: zulip_client.call_on_each_message(bridge.build_zulip_processor())
