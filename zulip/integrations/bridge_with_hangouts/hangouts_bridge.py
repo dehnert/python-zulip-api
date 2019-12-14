@@ -53,7 +53,11 @@ class Bridge:
         if not self._hangouts_conv_list:
             logger.warning("no conversation list yet -- please wait...")
             return False
-        conversation = self._hangouts_conv_list.get(conv_id)
+        try:
+            conversation = self._hangouts_conv_list.get(conv_id)
+        except KeyError:
+            logger.warning("conv_id %s not found to send '%s'", conv_id, body)
+            return False
         segments = [hangups.ChatMessageSegment(body)]
         self._event_loop.create_task(conversation.send_message(segments))
         return True
