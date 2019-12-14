@@ -15,7 +15,7 @@ from six.moves import configparser
 
 from typing import Any, Callable, Dict, Optional
 
-import hangups #pylint:disable=import-error
+import hangups
 import zulip
 
 logger = logging.getLogger(__name__)
@@ -28,53 +28,63 @@ class Bridge_ZulipFatalException(Exception):
 
 
 def format_user(user):
+    # type: (hangups.User) -> str
     """Format a Hangouts User object for display"""
     return "%s %s" % (user.full_name, user.emails)
+
+HangoutsCallbackType = Callable[[hangups.ConversationList, hangups.ConversationEvent], None]
 
 class Bridge:
     "Zulip/Hangouts bridge"""
 
-    def __init__(self, hangouts_client, zulip_client, streams, loop):
+    def __init__(self, hangouts_client, zulip_client, streams, event_loop):
+        # type: (Any, hangups.Client, zulip.Client, Dict[str, str], asyncio.AbstractEventLoop) -> None
         self._hangouts_client = hangouts_client
         self._hangouts_conv_list = None
         self._zulip_client = zulip_client
         self._streams = streams
-        self._loop = loop
+        self._event_loop = event_loop
 
     def send_hangout(self, conv_id, body):
+        # type: (Any, str, str) -> bool
         if not self._hangouts_conv_list:
             logger.warning("no conversation list yet -- please wait...")
             return False
         conversation = self._hangouts_conv_list.get(conv_id)
         segments = [hangups.ChatMessageSegment(body)]
-        self._loop.create_task(conversation.send_message(segments))
+        self._event_loop.create_task(conversation.send_message(segments))
         return True
 
     def build_zulip_processor(self):
+        # type: (Any) -> Callable[[Dict[str,Any]], None]
         def zulip_to_hangouts(msg):
+            # type: (Dict[str,Any]) -> None
             """Zulip -> Hangouts"""
             if msg['type'] != 'stream':
                 # ignore personals
-                return False
+                return
             sender = msg['sender_email']
             stream = msg['display_recipient']
             if '-bot' in sender:
                 logger.info("Ignoring message on stream %s from bot %s", stream, sender)
-                return False
+                return
             hangout = self._streams.get(stream, None)
             if not hangout:
                 logger.warning("Message received on unknown stream %s from %s", stream, sender)
-                return False
-            subject = "[%s] " % (msg['subject'], ) if msg['subject'] != 'hangouts' else ""
+                return
+            subject = "[%s] " % (msg['subject'],) if msg['subject'] != 'hangouts' else ""
             body = "%s: %s%s" % (sender, subject, msg['content'])
             self.send_hangout(hangout, body)
         return zulip_to_hangouts
 
     def get_stream_from_hangouts_event(self, conv_event):
+        # type: (Any, str) -> str
         return 'adehnert-test'
 
     def build_hangouts_processor(self):
+        # type: (Any) -> HangoutsCallbackType
         def hangouts_to_zulip(conv_list, conv_event):
+            # type: (hangups.ConversationList, hangups.ConversationEvent) -> None
             """Hangouts -> Zulip"""
             logger.info("got hangouts message")
             self._hangouts_conv_list = conv_list
@@ -82,7 +92,7 @@ class Bridge:
                 sender_user = conv_list._user_list.get_user(conv_event.user_id)
                 if sender_user.is_self:
                     logger.info("Ignoring message from self")
-                    return False
+                    return
                 sender = format_user(sender_user)
                 stream = self.get_stream_from_hangouts_event(conv_event)
                 content = "*%s*: %s" % (sender_user.full_name, conv_event.text)
@@ -96,13 +106,13 @@ class Bridge:
         return hangouts_to_zulip
 
     def run_hangouts(self):
+        # type: (Any) -> None
         event_cb = self.build_hangouts_processor()
         loop = asyncio.get_event_loop()
-        #loop.create_task(_async_main(event_cb, self._hangouts_client))
+        # loop.create_task(_async_main(event_cb, self._hangouts_client))
         logger.info("created hangouts task...")
         task = asyncio.ensure_future(_async_main(event_cb, self._hangouts_client),
                                      loop=loop)
-        #return
         try:
             print("Listening...")
             loop.run_until_complete(task)
@@ -114,14 +124,14 @@ class Bridge:
             loop.close()
 
 
-async def _async_main(event_cb, client):
+async def _async_main(event_cb: HangoutsCallbackType, client: hangups.Client) -> None:
     """Run the example coroutine."""
     logger.info("in async_main...")
     # Spawn a task for hangups to run in parallel with the handler coroutine.
     task = asyncio.ensure_future(client.connect())
 
     # Wait for hangups to either finish connecting or raise an exception.
-    on_connect = asyncio.Future()
+    on_connect = asyncio.Future()  # type: ignore
     client.on_connect.add_observer(lambda: on_connect.set_result(None))
     done, _ = await asyncio.wait(
         (on_connect, task), return_when=asyncio.FIRST_COMPLETED
@@ -139,7 +149,7 @@ async def _async_main(event_cb, client):
         await task
 
 
-async def receive_messages(event_cb, client):
+async def receive_messages(event_cb: HangoutsCallbackType, client: hangups.Client) -> None:
     """Setup observer to handle messages"""
     print('loading conversation list...')
     dummy_user_list, conv_list = (
@@ -200,7 +210,7 @@ def write_sample_config(target_path, zuliprc):
             ('site', 'https://chat.zulip.org'),
         ))),
         ('streams', OrderedDict((
-            ('adehnert-test', 'Hangout Name'),
+            ('test here', 'hangoutid'),
         ))),
     ))
 
@@ -228,9 +238,7 @@ def write_sample_config(target_path, zuliprc):
 
 def main():
     # type: () -> None
-    #signal.signal(signal.SIGINT, die)
-    #logging.basicConfig(level=logging.WARNING)
-    #logging.basicConfig(level=logging.DEBUG)
+    # signal.signal(signal.SIGINT, die)
     logging.basicConfig(level=logging.INFO)
 
     parser = generate_parser()
@@ -280,16 +288,12 @@ def main():
             bridge = Bridge(hangouts_client, zulip_client, stream_config, loop)
 
             print("Starting message handler on Zulip client")
-            zulip_thread = threading.Thread(target= lambda: zulip_client.call_on_each_message(bridge.build_zulip_processor()))
+            zulip_func = lambda: zulip_client.call_on_each_message(bridge.build_zulip_processor())
+            zulip_thread = threading.Thread(target=zulip_func)
             zulip_thread.start()
 
             print("Starting message handler on Hangouts client and waiting")
             bridge.run_hangouts()
-            #hangouts_thread = threading.Thread(target=bridge.run_hangouts)
-            #hangouts_thread.start()
-
-            #print("Starting message handler on Zulip client")
-            #zulip_client.call_on_each_message(bridge.build_zulip_processor())
 
         except Bridge_ZulipFatalException as exception:
             sys.exit("Zulip bridge error: {}".format(exception))
