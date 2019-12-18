@@ -48,7 +48,7 @@ class Bridge:
         self._default_topic = zulip_config.get('default_topic', '(no topic)')
         self._event_loop = event_loop
 
-    def send_hangout(self, conv_id, body):
+    def send_hangout(self, conv_id, segments):
         # type: (Any, str, str) -> bool
         if not self.hangouts_conv_list:
             logger.warning("no conversation list yet -- please wait...")
@@ -56,9 +56,8 @@ class Bridge:
         try:
             conversation = self.hangouts_conv_list.get(conv_id)
         except KeyError:
-            logger.warning("conv_id %s not found to send '%s'", conv_id, body)
+            logger.warning("conv_id %s not found to send %s", conv_id, segments)
             return False
-        segments = [hangups.ChatMessageSegment(body)]
         self._event_loop.create_task(conversation.send_message(segments))
         return True
 
@@ -70,21 +69,26 @@ class Bridge:
             if msg['type'] != 'stream':
                 # ignore personals
                 return
-            sender = msg['sender_email']
+            sender = msg['sender_full_name']
             stream = msg['display_recipient']
-            if '-bot' in sender:
-                logger.info("Ignoring message on stream %s from bot %s", stream, sender)
+            logger.info("got message: %s", msg)
+            if msg['sender_short_name'].endswith('-bot'):
+                logger.info("Ignoring message on stream %s from bot %s (%s)",
+                            stream, sender, msg['sender_short_name'])
                 return
             hangout = self._streams.get(stream, None)
             if not hangout:
-                logger.warning("Message received on unknown stream %s from %s", stream, sender)
+                logger.warning("Message received on unknown stream %s from %s",
+                               stream, msg['sender_email'])
                 return
             if msg['subject'] == self._default_topic:
                 subject = ""
             else:
                 subject = "[%s] " % (msg['subject'],)
-            body = "%s: %s%s" % (sender, subject, msg['content'])
-            self.send_hangout(hangout, body)
+            segments = [hangups.ChatMessageSegment(sender, is_bold=True, is_italic=True)]
+            segments.append(hangups.ChatMessageSegment(": "+subject))
+            segments.extend(hangups.ChatMessageSegment.from_str(msg['content']))
+            self.send_hangout(hangout, segments)
         return zulip_to_hangouts
 
     def get_stream_from_hangouts_event(self, conv_event):
@@ -111,7 +115,7 @@ class Bridge:
                 return
             sender = format_user(sender_user)
             stream = self.get_stream_from_hangouts_event(conv_event)
-            content = "*%s*: %s" % (sender_user.full_name, conv_event.text)
+            content = "***%s***: %s" % (sender_user.full_name, conv_event.text)
 
             reply_data = {
                 "type": "stream",
