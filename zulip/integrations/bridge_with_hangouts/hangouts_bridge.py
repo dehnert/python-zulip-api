@@ -106,13 +106,14 @@ class Bridge:
     def hangouts_to_zulip(self, conv_list, conv_event):
         # type: (hangups.ConversationList, hangups.ConversationEvent) -> None
         """Hangouts -> Zulip"""
-        logger.info("got hangouts message")
+        logger.info("got hangouts event")
         self.hangouts_conv_list = conv_list
         if isinstance(conv_event, hangups.ChatMessageEvent):
             sender_user = conv_list._user_list.get_user(conv_event.user_id)
             if sender_user.is_self:
                 logger.info("Ignoring message from self")
                 return
+            logger.info("hangouts message: %s %s", sender_user.__dict__, conv_event.__dict__)
             sender = format_user(sender_user)
             stream = self.get_stream_from_hangouts_event(conv_event)
             content = "***%s***: %s" % (sender_user.full_name, conv_event.text)
